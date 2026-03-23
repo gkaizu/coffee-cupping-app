@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Minus, 
@@ -11,16 +11,10 @@ import {
   MessageSquare, 
   Sparkles, 
   Check,
-  AlertTriangle
+  AlertTriangle,
+  Camera,
+  X
 } from 'lucide-react';
-
-/**
- * Global Professional Version (English UI) - SCA Protocol v2.5 Hybrid
- * * Optimized UX for Speed:
- * 1. Quick-jump Sliders: One-tap to jump between integer scores (e.g., 6.0 to 8.0).
- * 2. Fine-tune Buttons: +/- 0.25 for precision.
- * 3. Responsive Scaling: Visual tick marks for integer scores.
- */
 
 type RadarMetrics = {
   acidity: number;
@@ -65,13 +59,13 @@ const FLAVOR_CATEGORIES = [
 ];
 
 const SENSORY_CATEGORIES = [
-  { id: 'fragrance_aroma', name: 'Fragrance / Aroma', hasIntensity: true, intensityLabels: ['Dry', 'Break'] },
-  { id: 'flavor', name: 'Flavor', hasIntensity: false },
-  { id: 'aftertaste', name: 'Aftertaste', hasIntensity: false },
-  { id: 'acidity', name: 'Acidity', hasIntensity: true, intensityLabels: ['Intensity'] },
-  { id: 'body', name: 'Body', hasIntensity: true, intensityLabels: ['Level'] },
-  { id: 'balance', name: 'Balance', hasIntensity: false },
-  { id: 'overall', name: 'Overall', hasIntensity: false },
+  { id: 'fragrance_aroma', name: 'Fragrance / Aroma', hasIntensity: true, intensityLabels: ['Dry', 'Break'], description: 'Dry grounds & wet break scent' },
+  { id: 'flavor', name: 'Flavor', hasIntensity: false, description: 'The character of the taste' },
+  { id: 'aftertaste', name: 'Aftertaste', hasIntensity: false, description: 'The finish after swallowing' },
+  { id: 'acidity', name: 'Acidity', hasIntensity: true, intensityLabels: ['Intensity'], description: 'Brightness and crispness' },
+  { id: 'body', name: 'Body', hasIntensity: true, intensityLabels: ['Level'], description: 'Tactile weight and texture' },
+  { id: 'balance', name: 'Balance', hasIntensity: false, description: 'Harmony of all attributes' },
+  { id: 'overall', name: 'Overall', hasIntensity: false, description: 'Final subjective impression' },
 ];
 
 export default function CuppingPrototype() {
@@ -80,6 +74,8 @@ export default function CuppingPrototype() {
   const [notes, setNotes] = useState("");
   const [selectedTags, setSelectedTags] = useState<{name: string, activeClass: string}[]>([]);
   const [tagLimit, setTagLimit] = useState(2);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleResize = () => setTagLimit(window.innerWidth >= 768 ? 5 : 2);
@@ -113,6 +109,22 @@ export default function CuppingPrototype() {
   const [defects, setDefects] = useState({ cups: 0, type: 2 });
 
   // --- Handlers ---
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPreviewImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removeImage = () => {
+    setPreviewImage(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const adjustRadar = (key: keyof RadarMetrics, delta: number) => {
     setRadar(prev => ({ ...prev, [key]: Math.min(Math.max(prev[key] + delta, 1), 5) }));
   };
@@ -166,7 +178,7 @@ export default function CuppingPrototype() {
             <h1 className="text-sm sm:text-lg font-black italic flex items-center gap-1 shrink-0">
               <Coffee className="text-amber-700" fill="currentColor" size={20} />
               <span className="hidden xs:inline tracking-tighter uppercase">Cupping Log Pro</span>
-              <span className="xs:hidden font-black">CUP LOG</span>
+              <span className="xs:hidden font-black">PRO LOG</span>
             </h1>
             <div className="flex gap-0.5 sm:gap-1 bg-slate-100 p-0.5 sm:p-1 rounded-lg shrink-0">
               {[1, 2, 3, 4, 5].map(n => (
@@ -204,8 +216,44 @@ export default function CuppingPrototype() {
         </header>
       </div>
 
-      <div className="px-3 sm:px-4 mt-6 space-y-6">
+      <div className="px-3 sm:px-4 mt-4 space-y-6">
         
+        {/* Photo Upload Section */}
+        <section className="relative">
+          <input 
+            type="file" 
+            accept="image/*" 
+            capture="environment" 
+            className="hidden" 
+            ref={fileInputRef}
+            onChange={handleImageChange}
+          />
+          {!previewImage ? (
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full h-48 sm:h-64 border-2 border-dashed border-slate-300 rounded-3xl bg-white flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-amber-400 hover:text-amber-500 transition-all active:scale-[0.98]"
+            >
+              <div className="p-4 bg-slate-50 rounded-full">
+                <Camera size={32} />
+              </div>
+              <span className="text-sm font-black uppercase tracking-widest">Take a bean photo</span>
+            </button>
+          ) : (
+            <div className="relative w-full h-48 sm:h-64 rounded-3xl overflow-hidden shadow-lg border-2 border-white">
+              <img src={previewImage} alt="Cupping beans" className="w-full h-full object-cover" />
+              <button 
+                onClick={removeImage}
+                className="absolute top-3 right-3 p-2 bg-black/50 text-white rounded-full backdrop-blur-sm active:scale-90"
+              >
+                <X size={20} />
+              </button>
+              <div className="absolute bottom-4 left-4">
+                <span className="bg-amber-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-lg uppercase tracking-widest">Captured</span>
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* Quick Radar (1-5) */}
         <section className="bg-white p-3 sm:p-5 rounded-3xl shadow-sm border-2 border-slate-100">
           <h2 className="text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
@@ -275,7 +323,6 @@ export default function CuppingPrototype() {
               {/* Sensory Categories with Quick-Jump Sliders */}
               {SENSORY_CATEGORIES.map((cat) => (
                 <div key={cat.id} className="p-4 sm:p-6 rounded-2xl bg-slate-50 border-2 border-transparent hover:border-amber-100 transition-all space-y-6">
-                  {/* Category Header and Numeric Score */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <h4 className="text-sm sm:text-base font-black text-slate-800 leading-tight break-words uppercase">{cat.name}</h4>
@@ -286,53 +333,22 @@ export default function CuppingPrototype() {
                     </div>
                   </div>
 
-                  {/* Quick-Jump Slider and Precise Control */}
                   <div className="space-y-2">
                     <div className="flex items-center gap-4">
-                      <button 
-                        onClick={() => adjustScore(cat.id, -0.25)} 
-                        className="w-10 h-10 shrink-0 rounded-xl bg-white shadow-sm flex items-center justify-center border border-slate-200 active:bg-slate-100"
-                      >
-                        <Minus size={20}/>
-                      </button>
-
+                      <button onClick={() => adjustScore(cat.id, -0.25)} className="w-10 h-10 shrink-0 rounded-xl bg-white shadow-sm flex items-center justify-center border border-slate-200 active:bg-slate-100"><Minus size={20}/></button>
                       <div className="flex-1 relative pt-2">
-                        <input
-                          type="range"
-                          min="0"
-                          max="10"
-                          step="0.25"
-                          value={scores[cat.id]}
-                          onChange={(e) => setScore(cat.id, parseFloat(e.target.value))}
-                          className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-600"
-                        />
-                        {/* Scale Guides (Tick Marks) */}
+                        <input type="range" min="0" max="10" step="0.25" value={scores[cat.id]} onChange={(e) => setScore(cat.id, parseFloat(e.target.value))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-600" />
                         <div className="flex justify-between w-full px-1 mt-2 text-[9px] font-black text-slate-300">
-                          <span>0</span>
-                          <span>|</span>
-                          <span>|</span>
-                          <span className="text-slate-400">6</span>
-                          <span>|</span>
-                          <span className="text-slate-400">8</span>
-                          <span>|</span>
-                          <span>|</span>
-                          <span>10</span>
+                          <span>0</span><span>|</span><span>|</span><span className="text-slate-400">6</span><span>|</span><span className="text-slate-400">8</span><span>|</span><span>|</span><span>10</span>
                         </div>
                       </div>
-
-                      <button 
-                        onClick={() => adjustScore(cat.id, 0.25)} 
-                        className="w-10 h-10 shrink-0 rounded-xl bg-white shadow-sm flex items-center justify-center border border-slate-200 active:bg-slate-100"
-                      >
-                        <Plus size={20}/>
-                      </button>
+                      <button onClick={() => adjustScore(cat.id, 0.25)} className="w-10 h-10 shrink-0 rounded-xl bg-white shadow-sm flex items-center justify-center border border-slate-200 active:bg-slate-100"><Plus size={20}/></button>
                     </div>
                   </div>
 
-                  {/* Intensity Sliders (Internal recorded only) */}
                   {cat.hasIntensity && (
                     <div className="space-y-3 mt-4 pt-4 border-t border-slate-200">
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recorded Intensity (Not in score)</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Intensity Indicators</p>
                       {cat.id === 'fragrance_aroma' ? (
                         <>
                           {['fragrance_dry', 'fragrance_break'].map((ikey, idx) => (
@@ -369,7 +385,7 @@ export default function CuppingPrototype() {
                 </div>
               ))}
 
-              {/* Consistency Items */}
+              {/* Consistency Items (Restored for Final Integration) */}
               <div className="space-y-4 pt-6 border-t-4 border-slate-100">
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Consistency Checks (5-Cup Score)</h3>
                 {['uniformity', 'cleanCup', 'sweetness'].map((id) => (
@@ -397,7 +413,7 @@ export default function CuppingPrototype() {
                 ))}
               </div>
 
-              {/* Defects Section */}
+              {/* Defects Section (Restored for Final Integration) */}
               <div className="p-5 rounded-3xl bg-red-50 border-2 border-red-100 mt-8">
                 <div className="flex items-center gap-2 mb-4">
                   <AlertTriangle className="text-red-500" size={22} />
@@ -454,10 +470,10 @@ export default function CuppingPrototype() {
             <MessageSquare size={18} /> Final Observations
           </h2>
           <textarea 
-            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-sm sm:text-base focus:ring-4 focus:ring-amber-500/20 focus:border-amber-500 min-h-[140px] outline-none transition-all placeholder:text-slate-300"
-            placeholder="Complex flavor notes, mouthfeel texture, or structural balance..."
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-sm sm:text-base focus:ring-4 focus:ring-amber-500/20 focus:border-amber-500 min-h-[140px] outline-none transition-all placeholder:text-slate-300" 
+            placeholder="Complex flavor notes, mouthfeel texture, or structural balance..." 
+            value={notes} 
+            onChange={(e) => setNotes(e.target.value)} 
           />
         </section>
       </div>
