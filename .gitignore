@@ -45,3 +45,6 @@ yarn-error.log*
 .idea/
 *.swp
 *.bak
+
+# Docs
+docs/business_strategy.md
