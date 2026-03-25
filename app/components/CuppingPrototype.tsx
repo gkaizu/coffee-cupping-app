@@ -1,19 +1,21 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { 
-  Plus, 
-  Minus, 
-  Coffee, 
-  Save, 
-  Calculator, 
-  Tag, 
-  ChevronDown, 
-  ChevronUp, 
-  MessageSquare, 
-  Sparkles, 
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useFetcher } from 'react-router';
+import {
+  Plus,
+  Minus,
+  Coffee,
+  Save,
+  Calculator,
+  Tag,
+  ChevronDown,
+  ChevronUp,
+  MessageSquare,
+  Sparkles,
   Check,
   AlertTriangle,
   Camera,
-  X
+  X,
+  Loader2,
 } from 'lucide-react';
 
 type RadarMetrics = {
@@ -31,30 +33,32 @@ type IntensityMetrics = {
   body: number;
 };
 
+type SaveState = 'idle' | 'uploading' | 'saving' | 'success' | 'error';
+
 const FLAVOR_CATEGORIES = [
-  { 
-    name: 'Fruity/Berry', 
-    activeClass: 'bg-rose-700 text-white', 
+  {
+    name: 'Fruity/Berry',
+    activeClass: 'bg-rose-700 text-white',
     inactiveClass: 'bg-rose-50 text-rose-700 border-rose-200',
-    tags: ['Blueberry', 'Raspberry', 'Strawberry', 'Citrus', 'Apple', 'Peach'] 
+    tags: ['Blueberry', 'Raspberry', 'Strawberry', 'Citrus', 'Apple', 'Peach']
   },
-  { 
-    name: 'Floral', 
-    activeClass: 'bg-indigo-700 text-white', 
+  {
+    name: 'Floral',
+    activeClass: 'bg-indigo-700 text-white',
     inactiveClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-    tags: ['Jasmine', 'Rose', 'Lavender', 'Hibiscus'] 
+    tags: ['Jasmine', 'Rose', 'Lavender', 'Hibiscus']
   },
-  { 
-    name: 'Nutty/Choco', 
-    activeClass: 'bg-amber-900 text-white', 
+  {
+    name: 'Nutty/Choco',
+    activeClass: 'bg-amber-900 text-white',
     inactiveClass: 'bg-amber-50 text-amber-900 border-amber-200',
-    tags: ['Almond', 'Hazelnut', 'Dark Chocolate', 'Milk Chocolate', 'Caramel'] 
+    tags: ['Almond', 'Hazelnut', 'Dark Chocolate', 'Milk Chocolate', 'Caramel']
   },
-  { 
-    name: 'Spicy/Herbal', 
-    activeClass: 'bg-emerald-900 text-white', 
+  {
+    name: 'Spicy/Herbal',
+    activeClass: 'bg-emerald-900 text-white',
     inactiveClass: 'bg-emerald-50 text-emerald-900 border-emerald-200',
-    tags: ['Cinnamon', 'Black Tea', 'Mint', 'Herb'] 
+    tags: ['Cinnamon', 'Black Tea', 'Mint', 'Herb']
   },
 ];
 
@@ -68,13 +72,53 @@ const SENSORY_CATEGORIES = [
   { id: 'overall', name: 'Overall', hasIntensity: false, description: 'Final subjective impression' },
 ];
 
+async function uploadImageToS3(file: File): Promise<string> {
+  // Step 1: Presigned URL を取得
+  const res = await fetch('/api/presigned-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileName: file.name, contentType: file.type }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(`Presigned URL 取得失敗: ${body.error ?? res.status}`);
+  }
+
+  const { uploadUrl, key } = await res.json();
+
+  // Step 2: S3 に直接 PUT (リトライ最大3回)
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const putRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`S3 アップロード失敗: HTTP ${putRes.status}`);
+      return key;
+    } catch (err) {
+      lastError = err as Error;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 300 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastError!;
+}
+
 export default function CuppingPrototype() {
+  const fetcher = useFetcher<{ ok?: boolean; logId?: string; error?: string }>();
   const [activeCupTab, setActiveCupTab] = useState(1);
   const [showSca, setShowSca] = useState(true);
   const [notes, setNotes] = useState("");
   const [selectedTags, setSelectedTags] = useState<{name: string, activeClass: string}[]>([]);
   const [tagLimit, setTagLimit] = useState(2);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -83,6 +127,18 @@ export default function CuppingPrototype() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // fetcher の結果を監視してsaveStateを更新
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data) {
+      if (fetcher.data.ok) {
+        setSaveState('success');
+      } else if (fetcher.data.error) {
+        setSaveError(fetcher.data.error);
+        setSaveState('error');
+      }
+    }
+  }, [fetcher.state, fetcher.data]);
 
   // --- State Management ---
   const [radar, setRadar] = useState<RadarMetrics>({
@@ -112,6 +168,7 @@ export default function CuppingPrototype() {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setImageFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreviewImage(reader.result as string);
@@ -122,6 +179,7 @@ export default function CuppingPrototype() {
 
   const removeImage = () => {
     setPreviewImage(null);
+    setImageFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -145,9 +203,9 @@ export default function CuppingPrototype() {
   };
 
   const toggleTag = (tagName: string, activeClass: string) => {
-    setSelectedTags(prev => 
-      prev.find(t => t.name === tagName) 
-        ? prev.filter(t => t.name !== tagName) 
+    setSelectedTags(prev =>
+      prev.find(t => t.name === tagName)
+        ? prev.filter(t => t.name !== tagName)
         : [...prev, { name: tagName, activeClass }]
     );
   };
@@ -160,6 +218,49 @@ export default function CuppingPrototype() {
     });
   };
 
+  // --- Save Handler ---
+  const handleSave = async () => {
+    if (saveState === 'uploading' || saveState === 'saving') return;
+
+    setSaveError(null);
+    setSaveState('idle');
+
+    let imageS3Key: string | undefined;
+
+    // 画像がある場合はまず S3 にアップロード
+    if (imageFile) {
+      setSaveState('uploading');
+      try {
+        imageS3Key = await uploadImageToS3(imageFile);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setSaveError(`画像アップロード失敗: ${msg}`);
+        setSaveState('error');
+        return;
+      }
+    }
+
+    setSaveState('saving');
+
+    fetcher.submit(
+      {
+        scores,
+        intensities,
+        checks,
+        defects,
+        selectedTags: selectedTags.map(t => t.name),
+        totalScore: cupScore,
+        notes,
+        ...(imageS3Key ? { imageS3Key } : {}),
+      },
+      {
+        method: 'post',
+        action: '/?index',
+        encType: 'application/json',
+      }
+    );
+  };
+
   // --- Scoring Logic ---
   const cupScore = useMemo(() => {
     const sensoryTotal = Object.values(scores).reduce((a, b) => a + b, 0);
@@ -168,9 +269,18 @@ export default function CuppingPrototype() {
     return sensoryTotal + consistencyTotal - defectDeduction;
   }, [scores, checks, defects]);
 
+  const isBusy = saveState === 'uploading' || saveState === 'saving' || fetcher.state !== 'idle';
+
+  const saveButtonLabel = () => {
+    if (saveState === 'uploading') return '画像をアップロード中...';
+    if (saveState === 'saving' || fetcher.state === 'submitting') return '保存中...';
+    if (saveState === 'success') return '保存しました ✓';
+    return 'SAVE FINAL LOG';
+  };
+
   return (
     <div className="max-w-2xl mx-auto text-slate-900 pb-40 relative font-sans antialiased bg-slate-50/50">
-      
+
       {/* Sticky Header */}
       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm px-2 sm:px-4 pt-4 pb-2 border-b-4 border-amber-500 shadow-md">
         <header>
@@ -182,7 +292,7 @@ export default function CuppingPrototype() {
             </h1>
             <div className="flex gap-0.5 sm:gap-1 bg-slate-100 p-0.5 sm:p-1 rounded-lg shrink-0">
               {[1, 2, 3, 4, 5].map(n => (
-                <button 
+                <button
                   key={n}
                   onClick={() => setActiveCupTab(n)}
                   className={`w-7 h-7 sm:w-10 sm:h-10 rounded flex items-center justify-center text-xs sm:text-base font-black transition-all border ${activeCupTab === n ? 'bg-slate-900 border-slate-900 text-white shadow-sm' : 'bg-white border-transparent text-slate-400'}`}
@@ -192,7 +302,7 @@ export default function CuppingPrototype() {
               ))}
             </div>
           </div>
-          
+
           <div className="bg-[#0f172a] text-white p-3 sm:p-5 rounded-2xl flex items-center justify-between shadow-xl min-h-[70px] sm:min-h-[90px]">
             <div className="flex flex-col gap-1.5 flex-1 min-w-0">
               <span className="text-[10px] sm:text-xs font-black text-amber-500 uppercase tracking-widest leading-none">Total Cup Score</span>
@@ -217,19 +327,19 @@ export default function CuppingPrototype() {
       </div>
 
       <div className="px-3 sm:px-4 mt-4 space-y-6">
-        
+
         {/* Photo Upload Section */}
         <section className="relative">
-          <input 
-            type="file" 
-            accept="image/*" 
-            capture="environment" 
-            className="hidden" 
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
             ref={fileInputRef}
             onChange={handleImageChange}
           />
           {!previewImage ? (
-            <button 
+            <button
               onClick={() => fileInputRef.current?.click()}
               className="w-full h-48 sm:h-64 border-2 border-dashed border-slate-300 rounded-3xl bg-white flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-amber-400 hover:text-amber-500 transition-all active:scale-[0.98]"
             >
@@ -241,7 +351,7 @@ export default function CuppingPrototype() {
           ) : (
             <div className="relative w-full h-48 sm:h-64 rounded-3xl overflow-hidden shadow-lg border-2 border-white">
               <img src={previewImage} alt="Cupping beans" className="w-full h-full object-cover" />
-              <button 
+              <button
                 onClick={removeImage}
                 className="absolute top-3 right-3 p-2 bg-black/50 text-white rounded-full backdrop-blur-sm active:scale-90"
               >
@@ -295,7 +405,7 @@ export default function CuppingPrototype() {
                         onClick={() => toggleTag(tag, cat.activeClass)}
                         className={`px-3 py-2 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-bold border-2 transition-all ${isSelected ? `${cat.activeClass} border-transparent shadow-lg scale-105` : `${cat.inactiveClass} hover:border-slate-400`}`}
                       >
-                        {isSelected && <Check size={12} sm:size={14} strokeWidth={3} className="inline mr-1" />}
+                        {isSelected && <Check size={12} strokeWidth={3} className="inline mr-1" />}
                         {tag}
                       </button>
                     );
@@ -319,7 +429,7 @@ export default function CuppingPrototype() {
 
           {showSca && (
             <div className="space-y-10 animate-in fade-in duration-300 pb-4">
-              
+
               {/* Sensory Categories with Quick-Jump Sliders */}
               {SENSORY_CATEGORIES.map((cat) => (
                 <div key={cat.id} className="p-4 sm:p-6 rounded-2xl bg-slate-50 border-2 border-transparent hover:border-amber-100 transition-all space-y-6">
@@ -385,7 +495,7 @@ export default function CuppingPrototype() {
                 </div>
               ))}
 
-              {/* Consistency Items (Restored for Final Integration) */}
+              {/* Consistency Items */}
               <div className="space-y-4 pt-6 border-t-4 border-slate-100">
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Consistency Checks (5-Cup Score)</h3>
                 {['uniformity', 'cleanCup', 'sweetness'].map((id) => (
@@ -402,7 +512,7 @@ export default function CuppingPrototype() {
                       {checks[id as keyof typeof checks].map((checked, i) => (
                         <button
                           key={i}
-                          onClick={() => toggleCheck(id as any, i)}
+                          onClick={() => toggleCheck(id as keyof typeof checks, i)}
                           className={`flex-1 h-12 rounded-xl border-2 sm:border-4 transition-all flex items-center justify-center ${checked ? 'bg-amber-500 border-amber-600 shadow-inner' : 'bg-slate-50 border-slate-200'}`}
                         >
                            {checked && <Check className="text-white" size={24} strokeWidth={4} />}
@@ -413,7 +523,7 @@ export default function CuppingPrototype() {
                 ))}
               </div>
 
-              {/* Defects Section (Restored for Final Integration) */}
+              {/* Defects Section */}
               <div className="p-5 rounded-3xl bg-red-50 border-2 border-red-100 mt-8">
                 <div className="flex items-center gap-2 mb-4">
                   <AlertTriangle className="text-red-500" size={22} />
@@ -424,7 +534,7 @@ export default function CuppingPrototype() {
                     <label className="text-[10px] font-bold text-red-700 uppercase tracking-widest">Number of Cups with issues (0-5)</label>
                     <div className="flex gap-2">
                        {[0, 1, 2, 3, 4, 5].map(n => (
-                         <button 
+                         <button
                            key={n}
                            onClick={() => setDefects({...defects, cups: n})}
                            className={`flex-1 py-3 rounded-xl font-black text-sm transition-all border-2 ${defects.cups === n ? 'bg-red-600 border-red-700 text-white shadow-md' : 'bg-white border-red-200 text-red-900'}`}
@@ -437,13 +547,13 @@ export default function CuppingPrototype() {
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-red-700 uppercase tracking-widest">Intensity Type</label>
                     <div className="flex gap-3">
-                      <button 
+                      <button
                         onClick={() => setDefects({...defects, type: 2})}
                         className={`flex-1 py-3 rounded-xl border-2 font-black text-xs uppercase transition-all ${defects.type === 2 ? 'bg-red-600 border-red-700 text-white' : 'bg-white border-red-200 text-red-900'}`}
                       >
                         Taint (-2)
                       </button>
-                      <button 
+                      <button
                         onClick={() => setDefects({...defects, type: 4})}
                         className={`flex-1 py-3 rounded-xl border-2 font-black text-xs uppercase transition-all ${defects.type === 4 ? 'bg-red-800 border-red-950 text-white' : 'bg-white border-red-200 text-red-900'}`}
                       >
@@ -469,20 +579,43 @@ export default function CuppingPrototype() {
           <h2 className="text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
             <MessageSquare size={18} /> Final Observations
           </h2>
-          <textarea 
-            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-sm sm:text-base focus:ring-4 focus:ring-amber-500/20 focus:border-amber-500 min-h-[140px] outline-none transition-all placeholder:text-slate-300" 
-            placeholder="Complex flavor notes, mouthfeel texture, or structural balance..." 
-            value={notes} 
-            onChange={(e) => setNotes(e.target.value)} 
+          <textarea
+            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-sm sm:text-base focus:ring-4 focus:ring-amber-500/20 focus:border-amber-500 min-h-[140px] outline-none transition-all placeholder:text-slate-300"
+            placeholder="Complex flavor notes, mouthfeel texture, or structural balance..."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
           />
         </section>
       </div>
 
+      {/* Error Toast */}
+      {saveState === 'error' && saveError && (
+        <div className="fixed bottom-28 left-4 right-4 z-40 max-w-2xl mx-auto">
+          <div className="bg-red-600 text-white px-4 py-3 rounded-2xl text-sm font-bold flex items-center gap-2 shadow-xl">
+            <AlertTriangle size={18} />
+            {saveError}
+          </div>
+        </div>
+      )}
+
       {/* Save Button */}
       <div className="fixed bottom-6 left-0 right-0 px-4 z-30">
-        <button className="max-w-2xl mx-auto w-full bg-[#0f172a] text-white py-5 rounded-3xl font-black text-lg sm:text-xl flex items-center justify-center gap-3 shadow-2xl active:scale-[0.98] transition-all hover:bg-black uppercase tracking-widest">
-          <Save size={24} /> 
-          SAVE FINAL LOG
+        <button
+          onClick={handleSave}
+          disabled={isBusy}
+          className={`max-w-2xl mx-auto w-full py-5 rounded-3xl font-black text-lg sm:text-xl flex items-center justify-center gap-3 shadow-2xl active:scale-[0.98] transition-all uppercase tracking-widest
+            ${saveState === 'success' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#0f172a] hover:bg-black'}
+            ${isBusy ? 'opacity-70 cursor-not-allowed' : ''}
+            text-white`}
+        >
+          {isBusy ? (
+            <Loader2 size={24} className="animate-spin" />
+          ) : saveState === 'success' ? (
+            <Check size={24} strokeWidth={3} />
+          ) : (
+            <Save size={24} />
+          )}
+          {saveButtonLabel()}
         </button>
       </div>
     </div>
